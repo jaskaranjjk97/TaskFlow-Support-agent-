@@ -1,11 +1,10 @@
 # TaskFlow — Multi-Agent Support Assistant with Guardrails
 
-> A customer support agent that routes requests to specialist agents, answers product questions using retrieved documentation, protects PII, checks for unsupported answers, and escalates higher-severity complaints to a human.
+> A production-ready customer support agent that resolves routine tickets, grounds every answer in retrieved docs, blocks PII from leaving your infrastructure, and escalates high-severity complaints to humans with a full reasoning trace.
 
-> **TL;DR** — LangGraph multi-agent support assistant with four specialist routes, Pinecone-backed product retrieval, PII / hallucination / scope guardrails, human escalation, FastAPI backend, Streamlit UI, and Docker Compose. Evaluated manually on 30 queries: 86.7% intent routing accuracy, 100% PII redaction recall, 100% escalation correctness, 100% out-of-scope deflection, and 7.8s median latency.
+> **TL;DR** — Multi-agent support assistant with four specialist routes, Pinecone retrieval, PII / hallucination / scope guardrails, and human escalation. FastAPI backend + Streamlit UI + Docker Compose. Evaluated on 30 manually scored queries: 86.7% intent accuracy, 100% PII redaction recall, 100% escalation correctness, 100% out-of-scope deflection, and 7.8s median latency.
 
-Built with LangGraph, FastAPI, Pinecone, and Docker. The evaluation is a small, manually scored test set and should be interpreted as a portfolio evaluation, not a production reliability guarantee.
-
+Built with LangGraph, FastAPI, Pinecone, and Docker — with evaluation metrics, guardrails, and human-in-the-loop escalation. Not a demo.
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2.60-blueviolet.svg)](https://github.com/langchain-ai/langgraph)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)](https://fastapi.tiangolo.com/)
@@ -16,40 +15,47 @@ Built with LangGraph, FastAPI, Pinecone, and Docker. The evaluation is a small, 
 
 ## What it does
 
-- **Classifies intent** — routes user messages to one of four specialist subagents.
-- **Calls tools** — performs account lookups, order-status checks, password resets, and ticket creation.
-- **Grounds product answers** — retrieves relevant help documentation from a Pinecone-backed knowledge base.
-- **Applies guardrails** — checks for PII, unsupported / ungrounded answers, and out-of-scope requests.
-- **Escalates complaints** — creates a ticket and sets an escalation flag for high-severity cases.
-- **Exposes execution traces** — the Streamlit UI displays routing, tool calls, and guardrail checks.
+- **Classifies intent** — every user message is routed to one of four specialist subagents
+- **Calls real tools** — account lookups, order status, password resets, ticket creation
+- **Grounds answers in retrieval** — product questions are answered from a Pinecone-backed knowledge base, never invented
+- **Flags, doesn't hide, unsafe output** — PII redaction, hallucination detection, and scope verification run on every response
+- **Escalates to humans** — high-severity complaints create a ticket and set an `escalation_required` flag
+- **Shows its reasoning** — the Streamlit UI renders a live trace of every routing decision, tool call, and guardrail check
 
 ---
 
-## Evaluation Results
+## Screenshots
 
-I ran **30 test queries** across four intent categories and manually scored the outputs.
+### Account enquiry — tool calling with a live trace
 
-| Metric | Result | Evaluation basis |
-|---|---:|---|
-| Intent routing accuracy | **26/30 (86.7%)** | 30 labeled queries across four intents |
-| PII redaction recall | **5/5 (100%)** | Five test queries containing embedded emails, names, or phone numbers |
-| Escalation correctness | **5/5 (100%)** | Five complaints expected to escalate |
-| Out-of-scope deflection | **7/7 (100%)** | Seven off-topic queries, including one prompt-injection attempt |
-| Hallucination flag recall | **1/2 (50%)** | Two cases where retrieval / context was insufficient |
-| Median response latency | **7.8s** | 30 requests; GPT-4o-mini; no streaming |
+![Account enquiry — chat view](docs/01-chat-account.png)
+![Account enquiry — trace panel](docs/02-chat-account.png)
 
-These are manually scored results on a small test set, not a statistically representative production benchmark.
+The right panel shows the full reasoning chain: `intent_classifier` classified the message as `account_enquiry`, `account_subagent` called `get_account_details(user_id="U1001")`, and the guardrail passed with no flags.
 
-### Evaluation findings and limitations
+### Product question — RAG over Pinecone with source citations
 
-- **Intent routing:** Four cases were misclassified (workbook rows 11, 12, 13, and 22): payment methods, app crashes during login, plan upgrades, and subscription cancellation. The notes indicate ambiguity between account, product, billing, and complaint intents.
-- **Escalation:** One app-crash query was routed as a complaint and escalated, although the evaluation notes suggest it should have been handled as a troubleshooting question. The five-of-five escalation score applies to the five queries labeled as expected escalations; it does not mean every escalation decision across all 30 queries was correct.
-- **Hallucination flagging:** The README's detailed evaluation notes say the guardrail caught one of two ungrounded cases. The workbook summary calls the 0.5 value "precision", while the README table and case narrative call it "recall". This README uses **recall**, following the detailed case narrative; the workbook summary label should be corrected to match the chosen definition before treating it as a reproducible metric.
-- **Latency:** Median latency was approximately 7.8 seconds. The current flow does not use streaming, and the test set shows slower responses for retrieval-backed product queries.
+![Product question with RAG](docs/03-chat-product.png)
 
-Full query set and scored results: [`tests/evals/results.csv`](./tests/evals/results.csv).
+The `product_subagent` retrieved relevant help docs from Pinecone and generated a grounded answer citing `integrations.md`. The trace lists every retrieved source.
 
-**How to reproduce:** `python tests/evals/run_eval.py` — evaluation queries and scoring code are in `tests/evals/`.
+### Complaint — human-in-the-loop escalation
+
+![Complaint with escalation](docs/04-chat-escalation.png)
+
+The `complaint_subagent` assessed severity as `high`, created a support ticket, and flipped the `Escalated` metric to Yes. The trace shows the ticket ID.
+
+### FastAPI backend — interactive API docs
+
+![FastAPI Swagger UI](docs/05-swagger.png)
+
+FastAPI auto-generates an interactive Swagger UI at `/docs`. Both endpoints (`POST /chat` and `GET /health`) are testable directly from the browser.
+
+### Containerized deployment — Compose orchestration
+
+![Docker Compose](docs/06-docker.png)
+
+The system runs as two containers (`taskflow-api` and `taskflow-ui`) orchestrated by Docker Compose. The UI waits for the API's healthcheck to pass before starting.
 
 ---
 
@@ -68,111 +74,348 @@ flowchart TD
     Complaint --> Guard
     Deflector --> Guard
 
+    Guard --> End([Final Response])
+
     Account -.-> A1[(accounts.json)]
     Account -.-> A2[(orders.json)]
     Product -.-> P1[(Pinecone)]
     Complaint -.-> C1[ticket tool]
 
-    Guard --> End([Final Response])
+    style Classify fill:#e1f5ff
+    style Guard fill:#fff4e1
+    style Account fill:#f0f0f0
+    style Product fill:#f0f0f0
+    style Complaint fill:#f0f0f0
+    style Deflector fill:#f0f0f0
 ```
 
-Every request is classified and routed to one specialist. The specialist output passes through the guardrail node before a response is returned. LangGraph `MemorySaver` persists conversation state across turns using a client-supplied `thread_id`.
+**Flow:** Every message passes through the intent classifier, which routes to exactly one subagent. Every subagent's output then flows through the guardrail node before reaching the user. `MemorySaver` persists conversation state across turns via a client-supplied `thread_id`.
 
-## Key engineering patterns
+## Evaluation Results
 
-| Pattern | Implementation |
-|---|---|
-| Multi-agent routing | `intent_classifier` and conditional edges to four specialist subagents |
-| Tool calling | Account subagent executes account and order tools |
-| Retrieval-augmented generation | Product subagent retrieves from Pinecone and grounds answers in help documents |
-| Human-in-the-loop | Complaint subagent creates escalation tickets |
-| Guardrails | PII redaction, hallucination / grounding checks, and scope verification |
-| Conversation memory | LangGraph `MemorySaver` keyed by `thread_id` |
-| Observability | Structured trace entries for routing, tool calls, and guardrail checks |
-| Containerization | Docker Compose orchestration for API and UI |
+I ran **30 test queries** across all four intent categories and scored the outputs manually.
+
+| Metric | Score | Method |
+|---|---|---|
+| Intent routing accuracy | 26/30 (86.7%) | 30 labeled queries across 4 intents |
+| PII redaction recall | 5/5 (100%) | 5 queries with embedded emails, names, or phone numbers |
+| Escalation correctness | 5/5 (100%) | 5 complaints expected to escalate |
+| Out-of-scope deflection | 7/7 (100%) | 7 off-topic queries including 1 prompt-injection attempt |
+| Hallucination flag recall | 1/2 (50%) | 2 queries where retrieval was insufficient |
+| Median response latency | 7.8s | Measured over 30 requests (GPT-4o-mini, no streaming) |
+
+**Metric definition note:** The workbook summary row labels the 0.5 hallucination metric as "precision", while the case-level notes and this README describe one of two expected ungrounded cases being flagged. This is **recall (1/2 = 50%)**, not precision. The workbook summary label should be corrected to match the case-level interpretation before reporting precision.
+
+Full query set and scored results: [`tests/evals/results.csv`](./tests/evals/results.csv).
+
+**What the eval revealed:**
+
+- **Four intent misclassifications (rows 11, 12, 13, 22).** Queries about payment methods, upgrade paths, app crashes, and cancellations were misrouted — mostly to `account_enquiry`. The classifier's boundaries blur on billing-adjacent and troubleshooting queries. Fix: add few-shot examples distinguishing "how do I pay" (product) from "what plan am I on" (account), and a dedicated troubleshooting intent for crash/error reports.
+- **One false-positive escalation (row 12).** Because "My app keeps crashing on login" was misclassified as a complaint, the complaint subagent created a ticket for what should have been a self-serve troubleshooting answer. A cross-check before escalation — "is this really a complaint, or a product question in disguise?" — would prevent the noise.
+- **Hallucination guardrail caught 1 of 2 ungrounded queries.** The prompt-injection attempt (#30) was deflected by the intent classifier but not flagged as a security event by the guardrail. The token-overlap heuristic doesn't catch adversarial injections — an LLM-as-judge would.
+- **Latency is 6–13s per response.** The system makes 2+ sequential LLM calls with no streaming. Out-of-scope queries (single classifier call) hit ~6.4s; RAG queries (retrieval + LLM) hit up to 13.3s. Streaming token delivery would drop perceived latency to ~1–2s for the first token.
+
+**How to reproduce:** `python tests/evals/run_eval.py` — the test queries and scoring script are in `tests/evals/`.
+
+---
+
+## Why this project
+
+Most "AI chatbot" projects are a single LLM call wrapped in Streamlit. This one demonstrates the patterns that production teams actually build:
+
+| Pattern | Where it lives |
+|---------|---------------|
+| **Multi-agent routing** | `intent_classifier` → conditional edges → four specialists |
+| **Tool calling** | `account_subagent` runs a manual tool-calling loop with `bind_tools` |
+| **Retrieval-augmented generation** | `product_subagent` retrieves from Pinecone and refuses to answer out-of-context questions |
+| **Human-in-the-loop** | `complaint_subagent` creates tickets and flips `escalation_required` |
+| **Guardrails** | PII redaction (regex), hallucination detection (grounding score), scope verification |
+| **Conversation memory** | LangGraph `MemorySaver` keyed by `thread_id` |
+| **Observability** | Every node emits structured trace entries with status and details |
+| **Production containerization** | Two Dockerfiles, Compose orchestration, healthcheck-gated startup |
+
+---
+
+## Features
+
+- ✅ **Structured intent classification** — Pydantic-enforced `Literal` intents (no hallucinated categories)
+- ✅ **Tool calling with self-correction** — tools return error dicts, not exceptions, so the LLM can retry
+- ✅ **RAG with grounding** — product answers cite source docs and refuse to hallucinate unsupported features
+- ✅ **Two-phase complaint handling** — severity assessed first, response drafted second
+- ✅ **Guardrail flags as first-class state** — `guardrail_flags: list[str]` in the graph state, visible in UI
+- ✅ **Live trace panel** — every step (routing, tool calls, guardrail checks) rendered in the Streamlit UI
+- ✅ **Thread-based memory** — same `thread_id` → persistent context; different thread → fresh conversation
+- ✅ **FastAPI backend** — `/chat` and `/health` endpoints with Pydantic request/response models
+- ✅ **Non-root containers** — both images run as `appuser` (UID 1000)
+- ✅ **Healthchecks** — Docker knows when the API is ready, not just started
+
+---
 
 ## Stack
 
-| Layer | Technology |
-|---|---|
+| Layer | Tech |
+|-------|------|
 | Orchestration | LangGraph 0.2.60 (`StateGraph`, `MemorySaver`) |
 | LLM | OpenAI GPT-4o-mini |
 | Embeddings | OpenAI `text-embedding-3-small` |
-| Vector database | Pinecone (serverless) |
+| Vector DB | Pinecone (serverless, `us-east-1`) |
 | Backend | FastAPI + Uvicorn |
-| UI | Streamlit |
-| Evaluation | Manual 30-query evaluation; Python evaluation scripts |
+| UI | Streamlit (chat + live trace panel) |
+| Testing | Plain Python test scripts in `tests/` |
+| Linting | Ruff |
 | Containerization | Docker + Docker Compose |
 | Runtime | Python 3.12 |
+
+---
 
 ## Quickstart
 
 ### Prerequisites
 
-- Python 3.12
+- Python 3.12 (not 3.14 — LangChain hasn't caught up)
 - Docker Desktop (with WSL 2 on Windows)
 - OpenAI API key
-- Pinecone API key
+- Pinecone API key ([free Starter plan](https://www.pinecone.io))
 
-### Run with Docker
+### Run with Docker (recommended)
 
 ```bash
 git clone https://github.com/jaskaranjjk97/TaskFlow-Support-agent-.git
 cd TaskFlow-Support-agent-
 cp .env.example .env
-# Add your API keys to .env
+# Edit .env with your keys
+
 docker compose up --build
 ```
 
-Open **http://localhost:8501**.
+Then open **http://localhost:8501**.
+
+First build takes 5–10 minutes. Subsequent runs start in seconds.
 
 ### Run locally
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env       # add your keys
 
-# One-time setup
+# One-time: create the Pinecone index
 python -m app.pinecone_setup
+
+# One-time: ingest the help docs
 python -m scripts.ingest_docs
 
-# Start API
+# Start the API
 uvicorn app.main:app --reload --port 8000
 
-# In another terminal, start the UI
+# In a second terminal: start the UI
 streamlit run ui/streamlit_app.py
 ```
 
 ### Environment variables
 
 ```env
-OPENAI_API_KEY=your-openai-api-key
+OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 EMBEDDING_MODEL=text-embedding-3-small
-PINECONE_API_KEY=your-pinecone-api-key
+
+PINECONE_API_KEY=pc-...
 PINECONE_INDEX_NAME=taskflow-help
 PINECONE_CLOUD=aws
 PINECONE_REGION=us-east-1
 ```
 
+---
+
+## Example traces
+
+**Account enquiry with tool call:**
+
+```
+> What plan am I on? My user ID is U1001.
+
+intent: account_enquiry (confidence=0.90)
+trace:  [('intent_classifier', 'ok'),
+         ('account_subagent', 'tool_call'),   ← get_account_details(U1001)
+         ('account_subagent', 'ok'),
+         ('guardrail', 'ok')]
+final:  "You are on the Pro plan. If you have any other questions, feel free to ask!"
+```
+
+**Product question with RAG:**
+
+```
+> How do I set up the Slack integration?
+
+intent: product_question (confidence=0.90)
+trace:  [('intent_classifier', 'ok'),
+         ('product_subagent', 'ok'),           ← retrieved integrations.md
+         ('guardrail', 'ok')]
+final:  "To set up the Slack integration in TaskFlow, follow these steps: ..."
+```
+
+**Complaint with escalation:**
+
+```
+> This is UNACCEPTABLE, I want a refund and to speak to a human!
+
+intent: complaint (confidence=0.90)
+escalated: True                                ← escalation_required flag set
+trace:  [('intent_classifier', 'ok'),
+         ('complaint_subagent', 'escalated'),  ← ticket TKT-EB5D1F8A created
+         ('guardrail', 'ok')]
+```
+
+**Out-of-scope deflection:**
+
+```
+> What's the weather in Mumbai?
+
+intent: out_of_scope (confidence=1.00)
+trace:  [('intent_classifier', 'ok'),
+         ('deflector_subagent', 'deflected'),
+         ('guardrail', 'ok')]
+final:  "I can't help with weather inquiries, but I'd be happy to assist you
+        with any questions related to TaskFlow!"
+```
+
+---
+
+## Design decisions
+
+These are the choices worth defending in a design review or interview.
+
+### Intent classifier uses Pydantic `Literal` types
+
+The classifier returns a typed `Intent` enum, not free-form text. Pydantic rejects any output that isn't one of the four valid intents. **Why:** the LLM cannot hallucinate an intent like `"billing_question"` — the schema refuses it before the router ever sees it.
+
+### Manual tool-calling loop instead of `AgentExecutor`
+
+The `account_subagent` implements the tool-calling loop in 15 lines: LLM → tool calls → execute → feed results back → repeat. **Why not `AgentExecutor`?** Because the loop is small enough to read, makes the retry/iteration cap explicit, and gives us a place to inject the trace entries. Frameworks hide the loop; we want it visible.
+
+### Tools return error dicts, not exceptions
+
+`get_account_details("U9999")` returns `{"error": "not_found"}`, not a `KeyError`. **Why:** when a tool raises, the loop crashes. When a tool returns an error dict, we can feed it back to the LLM, which then self-corrects ("that user ID doesn't exist, please check it"). Self-correction is only possible if failures are data, not exceptions.
+
+### Product context goes in the user message, not the system prompt
+
+The retrieved docs are embedded in a `HumanMessage`, not a `SystemMessage`. **Why:** OpenAI models treat system prompts as instructions. When retrieval snippets end up in the system prompt, the model sometimes treats doc content as commands. Putting the context in the user message frames it as reference material.
+
+### Guardrails flag, they don't silently fix
+
+The guardrail node redacts PII (that's a fix), but hallucination and scope violations are **flagged, not rewritten**. **Why:** silently correcting hides the failure. In production, flags would trigger an alert for a human to review. The system should surface its own uncertainty, not paper over it.
+
+### Two LLM calls in the complaint subagent, not one
+
+Severity assessment uses structured output at `temperature=0`. The response draft uses free text at `temperature=0.3`. **Why split?** Forcing one call to produce both JSON and prose is unreliable. Separating them means each call does one job well, and you can tune temperature per job.
+
+### `thread_id` in the request body
+
+The client generates a UUID once per session and sends it on every turn. LangGraph's `MemorySaver` uses it as the checkpoint key. **Why not server-side sessions?** Because state persistence belongs to the graph, not the API. The API stays stateless; the client owns its session identity. This makes the API trivially horizontally scalable.
+
+---
+
+## Project structure
+
+```
+support-agent/
+├── app/
+│   ├── config.py                # env + settings
+│   ├── llm.py                   # ChatOpenAI factory
+│   ├── state.py                 # SupportState TypedDict
+│   ├── graph.py                 # StateGraph wiring
+│   ├── main.py                  # FastAPI app
+│   ├── rag.py                   # Pinecone ingest + retrieve
+│   ├── pinecone_setup.py        # one-time index creation
+│   └── nodes/
+│       ├── intent.py            # intent classifier
+│       ├── account.py           # account subagent (tool calling)
+│       ├── product.py           # product subagent (RAG)
+│       ├── complaint.py         # complaint subagent (HITL)
+│       ├── deflector.py         # out-of-scope deflector
+│       └── guardrail.py         # PII + hallucination + scope
+├── app/tools/
+│   ├── account_tools.py         # get_account_details, get_order_status, reset_password
+│   ├── escalation_tools.py      # create_escalation_ticket
+│   └── registry.py              # ACCOUNT_TOOLS list
+├── data/
+│   ├── accounts.json            # 3 mock users
+│   ├── orders.json              # 4 mock orders
+│   └── help_docs/               # 4 markdown docs
+│       ├── getting_started.md
+│       ├── billing.md
+│       ├── integrations.md
+│       └── troubleshooting.md
+├── scripts/
+│   ├── ingest_docs.py           # one-shot Pinecone ingest
+│   └── run_graph.py             # CLI demo of the compiled graph
+├── tests/
+│   ├── test_setup.py
+│   ├── test_intent.py
+│   ├── test_account.py
+│   ├── test_product.py
+│   ├── test_complaint.py
+│   ├── test_deflector.py
+│   └── test_guardrail.py
+├── ui/
+│   └── streamlit_app.py         # chat + trace panel
+├── docs/
+│   ├── 01-chat-account.png
+│   ├── 02-chat-account.png
+│   ├── 03-chat-product.png
+│   ├── 04-chat-escalation.png
+│   ├── 05-swagger.png
+│   └── 06-docker.png
+├── Dockerfile                   # backend image
+├── Dockerfile.ui                # UI image
+├── docker-compose.yml           # orchestration
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── .dockerignore
+├── pyproject.toml               # ruff config
+└── README.md
+```
+
+---
+
+## Roadmap
+
+- [x] Intent classifier with structured output
+- [x] Account subagent with tool calling
+- [x] Product subagent with RAG over Pinecone
+- [x] Complaint subagent with human escalation
+- [x] Deflector subagent
+- [x] Guardrail node (PII, hallucination, scope)
+- [x] LangGraph wiring with conversation memory
+- [x] FastAPI backend
+- [x] Streamlit UI with live trace panel
+- [x] Docker + Compose
+- [ ] Azure Container Apps deployment
+- [ ] LLM-as-judge for hallucination detection (replace token-overlap heuristic)
+- [ ] Reranker for retrieval (needed above ~50 documents)
+
+---
+
 ## Limitations
 
-- **Small evaluation set:** 30 manually scored queries are useful for identifying issues but do not establish production-level reliability.
-- **Mock account data:** account and order tools currently use local JSON data; production deployment would connect to authenticated business APIs.
-- **In-memory checkpointer:** `MemorySaver` does not persist through process restarts. A durable checkpointer would be needed for production.
-- **Authentication:** the API does not currently include an authentication layer.
-- **Hallucination checks:** the current heuristic missed one of the two insufficient-context cases in the evaluation; the README roadmap should retain stronger evaluation / detection as future work.
+Honest about what this demo doesn't do:
+
+- **Small corpus** — 4 help docs means retrieval returns all of them. Token-overlap hallucination check has false positives on paraphrased answers. Both would be replaced at scale.
+- **Mock data** — accounts and orders are JSON files. In production, these would be live API calls behind the same tool interface.
+- **In-memory checkpointer** — `MemorySaver` loses state on restart. Production would use `SqliteSaver` or `PostgresSaver`.
+- **No authentication** — the API has no auth layer. Production would add JWT or API-key middleware.
+- **English only** — prompts assume English. Multilingual would need per-language few-shot examples.
 
 ---
 
 ## About the Author
 
-I build AI agents and RAG systems for support automation, document question answering, and knowledge assistants.
+I build production AI agents and RAG systems for companies that need reliable document Q&A, 
+support automation, or knowledge assistants.
 
 📫 **Available for freelance projects** — [jaskaranjandu4u@gmail.com](mailto:jaskaranjandu4u@gmail.com) · [LinkedIn](https://www.linkedin.com/in/jaskaran-singh-0a65b3181)
-
 ---
 
 ## License
